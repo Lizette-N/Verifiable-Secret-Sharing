@@ -1,1 +1,0 @@
-# Verifiable-Secret-Sharing
