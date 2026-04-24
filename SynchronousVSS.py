@@ -60,20 +60,29 @@ def variableInitialization():
     t = 3 # t degree
     q = 19 # must be prime
     delta = 1 # maximum network latency
-    s = sample_random_polynomial(t, m, q) # Sample a t-degree random polynomial s(·) with s(0) = m
+    poly = sample_random_polynomial(t, m, q) # Sample a t-degree random polynomial s(·) with s(0) = m
     n = 2 * t + 1 # choose min. number of nodes n which fullfills n >= 2t+1
-    print(s)
+    print(poly)
     print("n = " + str(n))
-    return(t, q, n, delta, s, n, )
+    return(t, q, n, delta, poly, n)
 
+def broadcast(message, nodes):
+    return [message for _ in nodes]
 
 #nonce_commitment = R = g^k mod p
 #c = H(R, v) mod q
 #responce= z = k + c * sk_i mod q
-  
+
+
+# w = r() aka det tilfældige polynomium
+# poly = s() aka det hemmelige polynomium
+# v = [g^s(1) * h^r(1), g^s(2) * h^r(2), ..., g^s(n) * h^r(n)] aka commitment til det hemmelige polynomium
+# I = malicious nodes aka ikke sendt ACK
+# sigma = signatures for ACKs fra de ærlige nodes aka sendt ACK
+# pp = G F g h
   
 def sharingPhase():
-    t , q, n, delta, s, n, = variableInitialization()
+    t , q, n, delta, poly, n, = variableInitialization()
     pp = PC.Setup(q)
     
     signing_keys = {}
@@ -83,24 +92,76 @@ def sharingPhase():
         signing_keys[i] = sk_i
         verification_keys[i] = pk_i
     #time starts time = 0
-    v, w = PC.Commit(pp, s, n)
-    shares = sendShares(pp, v, w, s, n)
+    v, w = PC.Commit(pp, poly, n)
+    shares = sendShares(pp, v, w, poly, n)
     #print(shares)
     ACK = checkAndVerify(shares, pp, t, n, signing_keys)
     
     ## waits until (2*delta)
-    sigma = []
+    validSigma = [] # 
+    signed_nodes = []
     I = []
     for ack in ACK:
-        if ack["type"] == "ACK":
-            print("ACK received from node " + str(ack["node"]) + " with signature: " + str(ack["signature"]))
-            sigma.append(ack["signature"])
-        else :
-            I.append(ack["signature"])
-    
+        node = ack["node"]
+        signature = ack["signature"] # sigma_i
+        if Signatures.Verify(pp, verification_keys[node], v, signature):
+            validSigma.append(ack)
+            signed_nodes.append(ack["node"])
+    print("validSigma: " + str(validSigma))
+    I = []
+    for node in range(1, n + 1):
+        if node not in signed_nodes:
+            I.append(node)
+    print(w)
+    # s sharesne for hvert node der mangler ( malicious)
+    # piBold beviset for hver node der mangler (malicious) aka r(i) for hver node der mangler
+    # pi er r(i) som er valid opening proof
+    s, piBold = PC.BatchOpen(pp, poly, I, w)
+    print("s:" + str(s))
+    for i in range(0, n):# kig på hver node
+        checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares)
+            
+
+def checjks(pp,t,v,i,validSigma,s,piBold,I,ACK):
+    holds = False
+    Icheck = []
+    if(ACK[i]["signature"] in validSigma): # sigma_i er i valid_sigma
+        if len(validSigma) >=2*t+1:#if (sigma.len()>=2*t+1)
+            if PC.BatchVerify(pp, v, I, s, piBold): # batch verity er true
+                for j in range(len(ACK)): # kig på hver node
+                    if ACK[j]["signature"] not in validSigma: # laver liste af missing signature
+                        Icheck = ACK[j]["node"] # I indeholder alle nodes uden signatures
+                if Icheck == I: # sammenligner med i 
+                    return (v,s[i],piBold[i]) # returner v, share s[i] og proof pi[i])
+                                # if all true return (v,s_i,pi_i)
         
-    
-        
+    return 0 # else return 0
+
+def checks(pp, t, v, i, validSigma, piBold, I, ACK,shares):
+    Icheck = []
+
+    if any(ack["node"] == i for ack in validSigma):
+        if len(validSigma) >= 2 * t + 1:
+            if PC.BatchVerify(pp, v, I, s, piBold):
+                valid_nodes = [ack["node"] for ack in validSigma]
+
+                for node in range(1, 2 * t + 2):
+                    if node not in valid_nodes:
+                        Icheck.append(node)
+                        if i in I:
+                            pos = I.index(i)
+                            return (v, s[pos], piBold[pos])
+                        
+                if Icheck == I:
+                    for share in shares:
+                        if share["node"] == i:
+                            return (v, share["share"], share["proof"])
+    return 0
+
+
+
+
+
 def reconstructionPhase():
     a=1
     

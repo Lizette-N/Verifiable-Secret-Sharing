@@ -93,6 +93,22 @@ def Open(
     return u, pi
 
 
+def BatchOpen(
+    pp: PublicParameters,
+    polynomial: Sequence[int],
+    indices: Sequence[int],
+    witness: Witness,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    q = _field_modulus(pp)
+    s = _normalize_polynomial(polynomial, q)
+    r = _normalize_polynomial(witness.blinding_polynomial, q)
+
+    shares = tuple(_evaluate_polynomial(s, i, q) for i in indices)
+    proofs = tuple(_evaluate_polynomial(r, i, q) for i in indices)
+
+    return shares, proofs
+
+
 def Verify(
     pp: PublicParameters,
     commitment: Commitment,
@@ -101,6 +117,34 @@ def Verify(
     pi: int,
 ) -> bool:
     return commitment.values[i - 1] == _pedersen_commit(pp, u, pi)
+
+
+def BatchVerify(
+    pp: PublicParameters,
+    commitment: Commitment,
+    indices: Sequence[int],
+    shares: Sequence[int],
+    proofs: Sequence[int],
+) -> bool:
+    k = len(indices)
+    if k != len(shares) or k != len(proofs):
+        return False
+
+    q = _field_modulus(pp)
+    p = _group_modulus(pp)
+    gammas = [secrets.randbelow(q) for _ in range(k)]
+
+    folded_share = 0
+    folded_proof = 0
+    left = 1
+
+    for gamma, index, share, proof in zip(gammas, indices, shares, proofs):
+        folded_share = (folded_share + gamma * share) % q
+        folded_proof = (folded_proof + gamma * proof) % q
+        left = (left * pow(commitment.values[index - 1], gamma, p)) % p
+
+    right = _pedersen_commit(pp, folded_share, folded_proof)
+    return left == right
 
 
 def DegCheck(
