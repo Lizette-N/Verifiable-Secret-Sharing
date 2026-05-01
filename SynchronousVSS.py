@@ -77,9 +77,9 @@ def checkAndVerify(shares, pp, t, n, signing_keys):
         ):
             sigma_i = Signatures.Sign(pp, signing_keys[i], share["commitment"])
             ### PRINT TESTERS
-            print(f"\nNode {i} created signature:")
-            print(sigma_i)
-            print("Signature length:", len(sigma_i), "bytes")
+            # print(f"\nNode {i} created signature:")
+            # print(sigma_i)
+            # print("Signature length:", len(sigma_i), "bytes")
             ### PRINT TESTERS
             ack = {
                 "type": "ACK",
@@ -118,7 +118,7 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
     return coeffs
 
 def variableInitialization():
-    m = 5 # s(0)=m then s(0) is the secret to be shared
+    m = 20 # s(0)=m then s(0) is the secret to be shared
     t = 3 # t degree also t malicious nodes, also t+1 shares needed for reconstruction
     q = 19 # must be prime
     delta = 1 # maximum network latency
@@ -157,14 +157,15 @@ def sharingPhase():
     verification_keys = {node.id: node.verification_key for node in nodes}
     
     ### PRINT TESTERS --------------------------------------------------- ###
-    print("\nCreated nodes:", [node.id for node in nodes])
-    print("Signing key IDs:", list(signing_keys.keys()))
-    print("Verification key IDs:", list(verification_keys.keys()))
+    # print("\nCreated nodes:", [node.id for node in nodes])
+    # print("Signing key IDs:", list(signing_keys.keys()))
+    # print("Verification key IDs:", list(verification_keys.keys()))
     ### PRINT TESTERS --------------------------------------------------- ###
     
     #time starts time = 0
     v, w = PC.Commit(pp, poly, n)
     shares = sendShares(pp, v, w, poly, n)
+    reconstruct_secret_from_shares(shares, q, t)
     #print(shares)
     ACK = checkAndVerify(shares, pp, t, n, signing_keys)
     
@@ -178,17 +179,17 @@ def sharingPhase():
 
         valid = Signatures.Verify(pp, verification_keys[node], v, signature)
         ### PRINT TESTERS
-        print(f"\nDealer verifies signature from node {node}:")
-        print(signature)
-        print("Valid:", valid)
+        # print(f"\nDealer verifies signature from node {node}:")
+        # print(signature)
+        # print("Valid:", valid)
         ### PRINT TESTERS
         if valid:
             validSigma.append(ack)
             signed_nodes.append(node)
     ### PRINT TESTERS
-    print(f"\nValid signatures received from nodes:")
-    for ack in validSigma:
-        print("node:", ack["node"], "signature length:", len(ack["signature"]))
+    # print(f"\nValid signatures received from nodes:")
+    # for ack in validSigma:
+    #     print("node:", ack["node"], "signature length:", len(ack["signature"]))
     ### PRINT TESTERS
     for node in range(1, n + 1):
         if node not in signed_nodes:
@@ -201,9 +202,9 @@ def sharingPhase():
     print("s:" + str(s)) 
     
     
-    for i in range(1, n + 1):# kig på hver node
-        result = checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys)            
-        print(f"Node {i} output:", result)
+    # for i in range(1, n + 1):# kig på hver node
+    #     result = checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys)            
+    #     print(f"Node {i} output:", result)
 
         
 def checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys):
@@ -221,10 +222,27 @@ def checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys):
         
     return 0 # else return 0
 
+def lagrange_interpolate_at_zero(points, q):
+
+    secret = 0
+
+    for i, si in points:
+        numerator = 1
+        denominator = 1
+
+        for j, _ in points:
+            if i != j:
+                numerator = (numerator * (-j)) % q
+                denominator = (denominator * (i - j)) % q
+
+        lambda_i = numerator * pow(denominator, -1, q) % q
+        secret = (secret + si * lambda_i) % q
+    return secret
+
 # def checks(pp, t, v, i, validSigma, piBold, I, ACK,shares):
 #     Icheck = []
 #     if any(ack["node"] == i for ack in validSigma):
-#         if len(validSigma) >= 2 * t + 1:
+#         if len(validSigma) >= 2 * t + 1:e
 #             if PC.BatchVerify(pp, v, I, s, piBold):
 #                 valid_nodes = [ack["node"] for ack in validSigma]
 
