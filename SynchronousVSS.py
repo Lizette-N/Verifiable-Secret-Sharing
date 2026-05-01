@@ -132,7 +132,7 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
     return coeffs
 
 def variableInitialization():
-    m = 5 # s(0)=m then s(0) is the secret to be shared
+    m = 20 # s(0)=m then s(0) is the secret to be shared
     t = 3 # t degree also t malicious nodes, also t+1 shares needed for reconstruction
     q = 19 # must be prime
     delta = 1 # maximum network latency
@@ -287,7 +287,22 @@ def algorithm1():
 
 algorithm1()
 
+def lagrange_interpolate_at_zero(points, q):
 
+    secret = 0
+
+    for i, si in points:
+        numerator = 1
+        denominator = 1
+
+        for j, _ in points:
+            if i != j:
+                numerator = (numerator * (-j)) % q
+                denominator = (denominator * (i - j)) % q
+
+        lambda_i = numerator * pow(denominator, -1, q) % q
+        secret = (secret + si * lambda_i) % q
+    return secret
 
 
 
