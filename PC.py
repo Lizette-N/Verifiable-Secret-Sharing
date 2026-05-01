@@ -62,6 +62,7 @@ def Commit(
 
     degree = _polynomial_degree(coeffs)
     blind_coeffs = _random_polynomial(degree, q) # generates the other random polynomial r(.)
+    print("blinding polynomial: " + str(tuple(blind_coeffs)))
 
     values = tuple(
         _pedersen_commit(
