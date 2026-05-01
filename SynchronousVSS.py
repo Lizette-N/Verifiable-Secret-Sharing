@@ -19,75 +19,89 @@ class Node: # repræsentere en node i systemet
     signing_key: object # private signing key - bruges til at signere ACKs
     verification_key: object # public verification key - bruges af andre noder for at tjekke gyldigheden af nodes ACKs
     malicious: bool = False # false -> ærlige node, true -> ondsindet node
+    malicious_mode: str | None = None  # None, "silent", "invalid_ack"
     share_msg: dict | None = None # Gemmer den SHARE besked, noden modtager fra dealeren.
     output: object = None #Gemmer hvad noden outputter efter sharing phase.
 
-# def receive_share(self, share_msg):
-#     self.share_msg = share_msg
+    def receive_share(self, share_msg):
+        self.share_msg = share_msg
 
-# def create_ack(self, pp, t):
-#     if self.share_msg is None:
-#         return None
-#     commitment = self.share_msg["commitment"]
+    def create_ack(self, pp, t):
+        if self.share_msg is None:
+            return None
+        commitment = self.share_msg["commitment"]
+        if self.share_msg["node"] != self.id:
+            return None
 
-#     valid_share = (
-#         PC.DegCheck(pp, commitment, t)
-#         and PC.Verify(
-#                   pp,
-#                   commitment,
-#                   self.share_msg["node"],
-#                   self.share_msg["share"],
-#                   self.share_msg["proof"],
-#               )
-#           )
+        valid_share = (
+            PC.DegCheck(pp, commitment, t)
+            and PC.Verify(
+                pp,
+                commitment,
+                self.share_msg["node"],
+                self.share_msg["share"],
+                self.share_msg["proof"],
+            )
+        )
+        if not valid_share:
+            return None
 
-#           if not valid_share:
-#               return None
+        if self.malicious and self.malicious_mode == "silent":
+            return None
 
-#           if self.malicious and self.malicious_mode == "silent":
-#               return None
+        if self.malicious and self.malicious_mode == "invalid_ack":
+            wrong_message = "fake commitment"
+            sigma_i = Signatures.Sign(pp, self.signing_key, wrong_message)
+        else:
+            sigma_i = Signatures.Sign(pp, self.signing_key, commitment)
 
-#           if self.malicious and self.malicious_mode == "invalid_ack":
-#               wrong_message = "fake commitment"
-#               sigma_i = Signatures.Sign(pp, self.signing_key, wrong_message)
-#           else:
-#               sigma_i = Signatures.Sign(pp, self.signing_key, commitment)
+        return {
+            "type": "ACK",
+            "node": self.id,
+            "signature": sigma_i,
+        }
+        
+        
+        
+        
 
-#           return {
-#               "type": "ACK",
-#               "node": self.id,
-#               "signature": sigma_i,
-#           }
-
-
-
-
-def checkAndVerify(shares, pp, t, n, signing_keys):
+        
+def collect_acks(pp, t, nodes):
     ACK = []
-
-    for i in range (1, n+1):
-        share = shares[i-1]
-
-        if PC.DegCheck(pp, share["commitment"], t) and (PC.Verify(
-            pp, 
-            share["commitment"], 
-            share["node"], 
-            share["share"], 
-            share["proof"])
-        ):
-            sigma_i = Signatures.Sign(pp, signing_keys[i], share["commitment"])
-            ### PRINT TESTERS
-            print(f"\nNode {i} created signature:")
-            print(sigma_i)
-            print("Signature length:", len(sigma_i), "bytes")
-            ### PRINT TESTERS
-            ack = {
-                "type": "ACK",
-                "node": i,
-                "signature": sigma_i,
-            }
+    for node in nodes:
+        ack = node.create_ack(pp, t)
+        if ack is not None:
             ACK.append(ack)
-    return ACK 
+    return ACK
+
+
+
+#def checkAndVerify(shares, pp, t, n, signing_keys):
+#    ACK = []
+#
+#    for i in range (1, n+1):
+#        share = shares[i-1]
+#
+#        if PC.DegCheck(pp, share["commitment"], t) and (PC.Verify(
+#            pp, 
+#            share["commitment"], 
+#            share["node"], 
+#            share["share"], 
+#            share["proof"])
+#        ):
+#            sigma_i = Signatures.Sign(pp, signing_keys[i], share["commitment"])
+#            ### PRINT TESTERS
+#            print(f"\nNode {i} created signature:")
+#            print(sigma_i)
+#            print("Signature length:", len(sigma_i), "bytes")
+#            ### PRINT TESTERS
+#            ack = {
+#                "type": "ACK",
+#                "node": i,
+#                "signature": sigma_i,
+#            }
+#            ACK.append(ack)
+#    return ACK 
 
 def sendShares(pp, v, w, s, n):
     shares = []
@@ -134,8 +148,6 @@ def broadcast(message, nodes):
 #nonce_commitment = R = g^k mod p
 #c = H(R, v) mod q
 #responce= z = k + c * sk_i mod q
-
-
 # w = r() aka det tilfældige polynomium
 # poly = s() aka det hemmelige polynomium
 # v = [g^s(1) * h^r(1), g^s(2) * h^r(2), ..., g^s(n) * h^r(n)] aka commitment til det hemmelige polynomium
@@ -151,48 +163,48 @@ def sharingPhase():
 
     for i in range(1, n + 1):
         sk_i, pk_i = Signatures.GenerateKeyPair(pp)
-        nodes.append(Node(i, sk_i, pk_i))
+        node = Node(
+            id=i,
+            signing_key=sk_i,
+            verification_key=pk_i,
+        )
+        nodes.append(node)
+    
+    ## making malicious nodes---------------------------------------##
+    nodes[1].malicious = True # node id 2 er ondsindet
+    nodes[1].malicious_mode = "silent"
 
-    signing_keys = {node.id: node.signing_key for node in nodes}
-    verification_keys = {node.id: node.verification_key for node in nodes}
+    nodes[4].malicious = True # node id 5 er ondsindet
+    nodes[4].malicious_mode = "invalid_ack"
     
-    ### PRINT TESTERS --------------------------------------------------- ###
-    print("\nCreated nodes:", [node.id for node in nodes])
-    print("Signing key IDs:", list(signing_keys.keys()))
-    print("Verification key IDs:", list(verification_keys.keys()))
-    ### PRINT TESTERS --------------------------------------------------- ###
-    
+
     #time starts time = 0
     v, w = PC.Commit(pp, poly, n)
     shares = sendShares(pp, v, w, poly, n)
+    for node, share in zip(nodes, shares):
+        node.receive_share(share)
+        
+    
     #print(shares)
-    ACK = checkAndVerify(shares, pp, t, n, signing_keys)
+    ACK = collect_acks(pp, t, nodes)
     
     ## waits until (2*delta)
-    validSigma = [] # 
+    validSigma = [] 
     signed_nodes = []
-    I = []
     for ack in ACK:
-        node = ack["node"]
-        signature = ack["signature"] # sigma_i
+        node_id = ack["node"]
+        node = nodes[node_id-1] 
 
-        valid = Signatures.Verify(pp, verification_keys[node], v, signature)
-        ### PRINT TESTERS
-        print(f"\nDealer verifies signature from node {node}:")
-        print(signature)
-        print("Valid:", valid)
-        ### PRINT TESTERS
+        valid = Signatures.Verify(pp,node.verification_key, v, ack["signature"])
         if valid:
             validSigma.append(ack)
-            signed_nodes.append(node)
-    ### PRINT TESTERS
-    print(f"\nValid signatures received from nodes:")
-    for ack in validSigma:
-        print("node:", ack["node"], "signature length:", len(ack["signature"]))
-    ### PRINT TESTERS
-    for node in range(1, n + 1):
-        if node not in signed_nodes:
-            I.append(node)
+            signed_nodes.append(node_id)
+    
+    I = []
+    for node in nodes:
+        if node.id not in signed_nodes:
+            I.append(node.id)
+    print("these are illegal I: ",I)
     print(w) 
     # s sharesne for hvert node der mangler ( malicious)
     # piBold beviset for hver node der mangler (malicious) aka r(i) for hver node der mangler
@@ -200,50 +212,69 @@ def sharingPhase():
     s, piBold = PC.BatchOpen(pp, poly, I, w)
     print("s:" + str(s)) 
     
+    transcript = {
+        "commitment": v,
+        "I": I,
+        "sigma": validSigma,
+        "shares": s,
+        "proofs": piBold,
+    }
+    broadcast_outputs = broadcast(transcript, nodes)
     
-    for i in range(1, n + 1):# kig på hver node
-        result = checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys)            
-        print(f"Node {i} output:", result)
+    for node, transcript in zip(nodes, broadcast_outputs):
+        result = checks(pp,t,node.id,transcript,shares,nodes)
+        print(f"Node {node.id} output:", result)
+        
+    # for i in range(1, n + 1):# kig på hver node
+    #     result = checks(pp,t,v,i,validSigma,s,piBold,I,shares)            
+    #     print(f"Node {i} output:", result)
 
         
-def checks(pp,t,v,i,validSigma,s,piBold,I,ACK,shares,verification_keys):
-    holds = False
-    Icheck = []
-    if(ACK[i]["signature"] in validSigma): # sigma_i er i valid_sigma
-        if len(validSigma) >=t+1:#if (sigma.len()>=2*t+1)
-            if PC.BatchVerify(pp, v, I, s, piBold): # batch verity er true
-                for j in range(len(ACK)): # kig på hver node
-                    if ACK[j]["signature"] not in validSigma: # laver liste af missing signature
-                        Icheck = ACK[j]["node"] # I indeholder alle nodes uden signatures
-                if Icheck == I: # sammenligner med i 
-                    return (v,s[i],piBold[i]) # returner v, share s[i] og proof pi[i])
-                                # if all true return (v,s_i,pi_i)
-        
-    return 0 # else return 0
+def checks(pp,t,nodeId,transcript,shares,nodes):
+    v = transcript["commitment"]
+    I = transcript["I"]
+    validSigma = transcript["sigma"]
+    s = transcript["shares"]
+    piBold = transcript["proofs"]
+    
+    for ack in validSigma:
+        ack_node_id = ack["node"]
+        ack_node = nodes[ack_node_id - 1]
 
-# def checks(pp, t, v, i, validSigma, piBold, I, ACK,shares):
-#     Icheck = []
-#     if any(ack["node"] == i for ack in validSigma):
-#         if len(validSigma) >= 2 * t + 1:
-#             if PC.BatchVerify(pp, v, I, s, piBold):
-#                 valid_nodes = [ack["node"] for ack in validSigma]
+        if not Signatures.Verify(pp, ack_node.verification_key, v, ack["signature"]):
+            return 0
+    
+    valid_nodes = [ack["node"] for ack in validSigma]
+    #checker om I fra dealeren er korrekt
+    expected_I = []
+    for node_id in range(1, len(shares) + 1):
+        if node_id not in valid_nodes:
+            expected_I.append(node_id)
 
-#                 for node in range(1, 2 * t + 2):
-#                     if node not in valid_nodes:
-#                         Icheck.append(node)
-#                         if i in I:
-#                             pos = I.index(i)
-#                             return (v, s[pos], piBold[pos])
-                        
-#                 if Icheck == I:
-#                     for share in shares:
-#                         if share["node"] == i:
-#                             return (v, share["share"], share["proof"])
-#     return 0
+    if I != expected_I:
+        return 0
+    
+    # Check 1: der skal være mindst t+1 gyldige signaturer
+    if len(validSigma) < t + 1:
+        return 0
 
-
-
-
+    # Check 2: batch-verificer de shares, dealeren offentliggør for I
+    if len(I) > 0:
+        if not PC.BatchVerify(pp, v, I, s, piBold):
+            return 0
+    
+    # Hvis node i mangler gyldig signatur, skal dens share være i I
+    if nodeId in I:
+        pos = I.index(nodeId)
+        return (v, s[pos], piBold[pos])
+    
+    # Hvis node i har signeret gyldigt, bruger den sin oprindelige SHARE-besked
+    if nodeId in valid_nodes:
+        share_msg = shares[nodeId - 1]
+        return (v, share_msg["share"], share_msg["proof"])
+    
+    # Hvis den hverken er i I eller har gyldig signatur, er transcriptet forkert
+    return 0
 
 def reconstructionPhase():
     a=1
