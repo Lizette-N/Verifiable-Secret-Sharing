@@ -9,10 +9,6 @@ import PC
 import Signatures
 from dataclasses import dataclass
 
-
-##def field_modulus(pp: PublicParameters) -> int:
-##  return int(pp.F["modulus"])
-##----------------------------------------Node Functions----------------------------------------##
 @dataclass
 class Node: # repræsentere en node i systemet
     id: int # nodes ummer/index
@@ -34,7 +30,7 @@ class Node: # repræsentere en node i systemet
             return None
 
         valid_share = (
-            PC.DegCheck(pp, v, t)
+            PC.DegCheck(pp, v, 2*t)
             and PC.Verify(
                 pp,
                 v,
@@ -60,23 +56,51 @@ class Node: # repræsentere en node i systemet
             "node": self.id,
             "signature": sigma_i,
         }
-        
-def collect_acks(pp, t, nodes):
-    ACK = []
+
+def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
+    if degree < 0:
+        raise ValueError("degree must be >= 0")
+    if not (0 <= secret < q):
+        secret %= q
+
+    coeffs = [secret]
+    for _ in range(degree):
+        coeffs.append(secrets.randbelow(q))
+    return coeffs
+
+def make_malicious(nodes):
+    ## making malicious nodes---------------------------------------##
+    # nodes[1] = node id 2 and so on, because node ids start from 1 but list index starts from 0
     
+     
+    nodes[1].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
+    nodes[1].malicious_mode = "silent"
+ 
+    nodes[2].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
+    nodes[2].malicious_mode = "silent"
 
+    nodes[3].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
+    nodes[3].malicious_mode = "silent"
 
-    for node in nodes:
-        if node.malicious and node.malicious_mode == "silent":
-            print(f"Node {node.id} is malicious and sends no ACK")
-            continue
+    nodes[4].malicious = True # node id 5 er ondsindet og sender en ugyldig ACK (aka en ACK som ikke er en signatur på commitment v)
+    nodes[4].malicious_mode = "invalid_ack"# men sender gyldig Recon og dermed kan rekonstrueres korrekt, så den ikke forstyrrer reconstruction phase
+    
+    nodes[6].malicious = True # node id 7 er ondsindet og sender en ugyldig RECON (aka share og proof passer ikke sammen)
+    nodes[6].malicious_mode = "invalid_recon"
 
-        ack = node.create_ack(pp, t)
-        if ack is not None:
-            ACK.append(ack)
+def reliable_broadcast(message, nodes):
+    #simulation of byzantine reliable broadcast
+    return [message for _ in nodes]
 
-    return ACK
-
+def variable_initialization():
+    m = 234 # s(0)=m then s(0) is the secret to be shared
+    t = 3 # max malicious nodes, sharing polynomial has degree 2t, reconstruction needs 2t+1 shares
+    q = 251 # must be prime
+    poly = sample_random_polynomial(2*t, m, q) # Sample a 2*t-degree random polynomial s(·) with s(0) = m
+    n = 3 * t + 1 # choose min. number of nodes n which fullfills n >= 3t+1
+    print(poly)
+    print("n = " + str(n))
+    return t, q, n, poly
 
 def send_shares(pp, v, w, s, n):
     shares = []
@@ -94,31 +118,46 @@ def send_shares(pp, v, w, s, n):
     
     return shares    
 
+def wait_for_enough_valid_signatures(pp, t, nodes, v):
+    valid_acks = []
+    signed_nodes = set()
 
-def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
-    if degree < 0:
-        raise ValueError("degree must be >= 0")
-    if not (0 <= secret < q):
-        secret %= q
+    # 2 * t + 1 required
+    threshold = 2 * t + 1
 
-    coeffs = [secret]
-    for _ in range(degree):
-        coeffs.append(secrets.randbelow(q))
-    return coeffs
+    for node in nodes:
+        ack = node.create_ack(pp, t)
 
-def variable_initialization():
-    m = 234 # s(0)=m then s(0) is the secret to be shared
-    t = 3 # t degree also t malicious nodes, also t+1 shares needed for reconstruction
-    q = 251 # must be prime
-    delta = 1 # maximum network latency
-    poly = sample_random_polynomial(t, m, q) # Sample a t-degree random polynomial s(·) with s(0) = m
-    n = 2 * t + 1 # choose min. number of nodes n which fullfills n >= 2t+1
-    print(poly)
-    print("n = " + str(n))
-    return t, q, n, delta, poly
+        #if no valid ack, skip to next node
+        if ack is None:
+            continue
+        
+        node_id = ack["node"]
 
-def broadcast(message, nodes):
-    return [message for _ in nodes]
+        # don't count same node twice
+        if node_id in signed_nodes:
+            continue
+
+        verification_key = nodes[node_id -1].verification_key
+
+        # verify the signature for sigma
+        valid = Signatures.Verify(pp, verification_key, v, ack["signature"]
+        )
+
+        if not valid:
+            continue
+        
+        valid_acks.append(ack)
+        signed_nodes.add(node_id)
+
+        #algorithm can be continued when enough valid signatures on v are found.
+        if len(valid_acks) >= threshold:
+            break
+    
+    if len(valid_acks) < threshold:
+        raise RuntimeError("Dealer did not recieve 2t +1 valic signatures on v.")
+
+    return valid_acks, signed_nodes
 
 def checks(pp,t,nodeId,transcript,shares,nodes):
     v = transcript["commitment"]
@@ -144,8 +183,8 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
     if I != expected_I:
         return 0
     
-    # Check 1: der skal være mindst t+1 gyldige signaturer
-    if len(valid_sigma) < t + 1:
+    # Check 1: der skal være mindst 2*t+1 gyldige signaturer
+    if len(valid_sigma) < 2 * t + 1:
         return 0
 
     # Check 2: batch-verificer de shares, dealeren offentliggør for I
@@ -166,28 +205,6 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
     # Hvis den hverken er i I eller har gyldig signatur, er transcriptet forkert
     return 0
 
-def make_malicious(nodes):
-    ## making malicious nodes---------------------------------------##
-    # nodes[1] = node id 2 and so on, because node ids start from 1 but list index starts from 0
-    
-    nodes[1].malicious = True
-    nodes[1].malicious_mode = "invalid_ack"
-
-    nodes[2].malicious = True 
-    nodes[2].malicious_mode = "invalid_ack"
-
-    nodes[3].malicious = True 
-    nodes[3].malicious_mode = "invalid_recon"
-    
-    nodes[4].malicious = True 
-    nodes[4].malicious_mode = "invalid_recon"
-    nodes[5].malicious = True 
-    nodes[5].malicious_mode = "silent"
-    nodes[6].malicious = True 
-    nodes[6].malicious_mode = "silent"
-
-
-
 #-------------------------------Variable explenation-------------------------------##
 #nonce_commitment = R = g^k mod p
 #c = H(R, v) mod q
@@ -198,15 +215,14 @@ def make_malicious(nodes):
 # I = nodes missing valid ACK signatures on v
 # sigma = signatures for ACKs fra de ærlige nodes aka sendt ACK
 # pp = G F g h
-
+            
 def sharing_phase():
     dealer_mode = None
     # dealer_mode = "invalid_share"
     # dealer_mode = "missing_share"
     # dealer_mode = "invalid_transcript"
 
-
-    t , q, n, delta, poly = variable_initialization()
+    t , q, n, poly = variable_initialization()
     pp = PC.Setup(q)
     
     nodes = []
@@ -223,10 +239,9 @@ def sharing_phase():
     # making the malicious nodes (not part of algorithem but needed for testing) 
     make_malicious(nodes)
     
-
-    #time starts time = 0
     v, w = PC.Commit(pp, poly, n)
     shares = send_shares(pp, v, w, poly, n)
+
     # inplimenting malisius dealer behavior
     if dealer_mode == "invalid_share":
         print("Dealer is malicious and sends an invalid SHARE to node 3")
@@ -234,46 +249,31 @@ def sharing_phase():
     if dealer_mode == "missing_share":
         print("Dealer is malicious and sends no SHARE to node 3")
         shares[2] = None
-        
-    for node, share in zip(nodes, shares):
-        if share is not None:
-            node.receive_share(share)
-        
-    
-    #print(shares)
-    ACK = collect_acks(pp, t, nodes)
-    
-    ## waits until (2*delta)
-    valid_sigma = [] 
-    signed_nodes = []
-    for ack in ACK:
-        node_id = ack["node"]
-        verification_key = nodes[node_id -1].verification_key
 
-        valid = Signatures.Verify(pp,verification_key, v, ack["signature"])
-        if valid:
-            valid_sigma.append(ack)
-            signed_nodes.append(node_id)
-    
+    for node, share in zip(nodes, shares):
+        node.receive_share(share)
+        
+    ## wait for 2t + 1 valid signatures on v
+    valid_sigma, signed_nodes = wait_for_enough_valid_signatures(pp, t, nodes, v)
+
     I = []
     for node in nodes:
         if node.id not in signed_nodes:
             I.append(node.id)
     print("nodes missing valid signatures I: ",I)
     print(w) 
+
     # s sharesne for hvert node der mangler ( malicious)
     # pi_bold beviset for hver node der mangler (malicious) aka r(i) for hver node der mangler
     # pi er r(i) som er valid opening proof
     s, pi_bold = PC.BatchOpen(pp, poly, I, w)
-    
-    
+
     # implimenting malicious dealer behavior
     if dealer_mode == "invalid_transcript" and len(s) > 0:
         print("Dealer is malicious and broadcasts an invalid transcript")
         s = list(s)
         s[0] = s[0] + 1
         s = tuple(s)
-    
 
     print("s:" + str(s)) 
     
@@ -284,7 +284,7 @@ def sharing_phase():
         "shares": s,
         "proofs": pi_bold,
     }
-    broadcast_outputs = broadcast(transcript, nodes)
+    broadcast_outputs = reliable_broadcast(transcript, nodes)
     
     for node, transcript in zip(nodes, broadcast_outputs):
         result = checks(pp,t,node.id,transcript,shares,nodes)
@@ -343,7 +343,7 @@ def create_recon(self):
 def reconstruction_phase(pp, t, q, nodes):
     RECON = []
 
-    # Algorithm 1 line 201:
+    # Algorithm 2 line 201:
     # every node sends <RECON, s(i), pi_i>
     for node in nodes:
         recon = create_recon(node)
@@ -353,8 +353,8 @@ def reconstruction_phase(pp, t, q, nodes):
     v = None
     T = []
 
-# Algorithm 1 lines 202-206:
-# receive RECON messages, verify, collect t+1 shares
+# Algorithm 2 lines 202-206:
+# receive RECON messages, verify, collect 2t+1 shares
     for recon in RECON:
         node_id = recon["node"]
         commitment = recon["commitment"]
@@ -371,7 +371,7 @@ def reconstruction_phase(pp, t, q, nodes):
         if PC.Verify(pp, v, node_id, share, proof):
             T.append((node_id, share))
 
-        if len(T) == t + 1:
+        if len(T) >= 2*t + 1:
             secret = lagrange_interpolate_at_zero(T, q)
             print("Reconstructed secret:", secret)
             return secret
@@ -381,21 +381,11 @@ def reconstruction_phase(pp, t, q, nodes):
 
 
 
-def algorithm1():
+def algorithm2():
     pp, t, q, nodes = sharing_phase()
     reconstruction_phase(pp, t, q, nodes)
 
 
-algorithm1()
-## Algorithm1
-    ## START PHASE 
-        ## PP 
-        ## CHOOSE SECRET, Q, DEGREE, N 
-
-    ## SHARING PHASE
-
-    ## RECONSTRUCTION PHASE
+algorithm2()
 
 
-
-    
