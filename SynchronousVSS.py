@@ -8,6 +8,7 @@ from typing import Sequence
 import PC
 import Signatures
 from dataclasses import dataclass
+import time
 
 
 ##def field_modulus(pp: PublicParameters) -> int:
@@ -61,19 +62,36 @@ class Node: # repræsentere en node i systemet
             "signature": sigma_i,
         }
         
-def collect_acks(pp, t, nodes):
+def collect_acks(pp, t, nodes, delta):
     ACK = []
-    
+    deadline = 2 * delta
 
+    # testing delays
+    ack_arrival_times = {
+        # node_id: arrival_time
+        # 3: 3 * delta,  # node 3 is too late
+    }
+    #print("Dealer sends SHARE at tau = 0")
+    #print(f"Dealer waits until tau = {deadline}")
+    
 
     for node in nodes:
         if node.malicious and node.malicious_mode == "silent":
-            print(f"Node {node.id} is malicious and sends no ACK")
+            #print(f"Node {node.id} is malicious and sends no ACK")
             continue
 
         ack = node.create_ack(pp, t)
-        if ack is not None:
+        if ack is None:
+            continue
+            
+        arrival_time = ack_arrival_times.get(node.id, 2 * delta)
+        ack["arrival_time"] = arrival_time
+
+        if arrival_time <= deadline:
+            #print(f"Node {node.id} ACK arrived at tau = {arrival_time}")
             ACK.append(ack)
+        else:
+            print(f"Node {node.id} ACK arrived at tau = {arrival_time}, too late")
 
     return ACK
 
@@ -108,19 +126,19 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
 
 def variable_initialization():
     m = 234 # s(0)=m then s(0) is the secret to be shared
-    t = 3 # t degree also t malicious nodes, also t+1 shares needed for reconstruction
+    t = 20 # t degree also t malicious nodes, also t+1 shares needed for reconstruction
     q = 251 # must be prime
     delta = 1 # maximum network latency
     poly = sample_random_polynomial(t, m, q) # Sample a t-degree random polynomial s(·) with s(0) = m
     n = 2 * t + 1 # choose min. number of nodes n which fullfills n >= 2t+1
-    print(poly)
-    print("n = " + str(n))
+    #print(poly)
+    #print("n = " + str(n))
     return t, q, n, delta, poly
 
 def broadcast(message, nodes):
     return [message for _ in nodes]
 
-def checks(pp,t,nodeId,transcript,shares,nodes):
+def checks(pp,t,current_node_id,transcript,shares,nodes):
     v = transcript["commitment"]
     I = transcript["I"]
     valid_sigma = transcript["sigma"]
@@ -137,9 +155,9 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
     valid_nodes = [ack["node"] for ack in valid_sigma]
     #checker om I fra dealeren er korrekt
     expected_I = []
-    for node_id in range(1, len(shares) + 1):
-        if node_id not in valid_nodes:
-            expected_I.append(node_id)
+    for expected_node_id in range(1, len(shares) + 1):
+        if expected_node_id not in valid_nodes:
+            expected_I.append(expected_node_id)
 
     if I != expected_I:
         return 0
@@ -154,13 +172,13 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
             return 0
     
     # Hvis node i mangler gyldig signatur, skal dens share være i I
-    if nodeId in I:
-        pos = I.index(nodeId)
+    if current_node_id in I:
+        pos = I.index(current_node_id)
         return (v, s[pos], pi_bold[pos])
     
     # Hvis node i har signeret gyldigt, bruger den sin oprindelige SHARE-besked
-    if nodeId in valid_nodes:
-        share_msg = shares[nodeId - 1]
+    if current_node_id in valid_nodes:
+        share_msg = shares[current_node_id - 1]
         return (v, share_msg["share"], share_msg["proof"])
     
     # Hvis den hverken er i I eller har gyldig signatur, er transcriptet forkert
@@ -241,7 +259,7 @@ def sharing_phase():
         
     
     #print(shares)
-    ACK = collect_acks(pp, t, nodes)
+    ACK = collect_acks(pp, t, nodes, delta)
     
     ## waits until (2*delta)
     valid_sigma = [] 
@@ -259,8 +277,8 @@ def sharing_phase():
     for node in nodes:
         if node.id not in signed_nodes:
             I.append(node.id)
-    print("nodes missing valid signatures I: ",I)
-    print(w) 
+    #print("nodes missing valid signatures I: ",I)
+    #print(w) 
     # s sharesne for hvert node der mangler ( malicious)
     # pi_bold beviset for hver node der mangler (malicious) aka r(i) for hver node der mangler
     # pi er r(i) som er valid opening proof
@@ -275,7 +293,7 @@ def sharing_phase():
         s = tuple(s)
     
 
-    print("s:" + str(s)) 
+    #print("s:" + str(s)) 
     
     transcript = {
         "commitment": v,
@@ -289,7 +307,7 @@ def sharing_phase():
     for node, transcript in zip(nodes, broadcast_outputs):
         result = checks(pp,t,node.id,transcript,shares,nodes)
         node.output = result
-        print(f"Node {node.id} output:", result)
+        #print(f"Node {node.id} output:", result)
         
     # for i in range(1, n + 1):# kig på hver node
     #     result = checks(pp,t,v,i,valid_sigma,s,pi_bold,I,shares)            
@@ -323,12 +341,12 @@ def create_recon(self):
     
     # making nodes send no RECON if they are silent malicious
     if self.malicious and self.malicious_mode == "silent":
-        print(f"Node {self.id} is malicious and sends no RECON")
+        #print(f"Node {self.id} is malicious and sends no RECON")
         return None
 
     # making nodes send wrong RECON if they are invalidmalicious
     if self.malicious and self.malicious_mode == "invalid_recon":
-        print(f"Node {self.id} is malicious and sends wrong RECON")
+        #print(f"Node {self.id} is malicious and sends wrong RECON")
         share = (share + 1) 
         
     
@@ -373,17 +391,34 @@ def reconstruction_phase(pp, t, q, nodes):
 
         if len(T) == t + 1:
             secret = lagrange_interpolate_at_zero(T, q)
-            print("Reconstructed secret:", secret)
+            #print("Reconstructed secret:", secret)
             return secret
 
-    print("Not enough valid shares")
+    #print("Not enough valid shares")
     return None
 
 
 
 def algorithm1():
+    total_start = time.perf_counter()
+
+    sharing_start = time.perf_counter()
     pp, t, q, nodes = sharing_phase()
-    reconstruction_phase(pp, t, q, nodes)
+    sharing_end = time.perf_counter()
+
+    reconstruction_start = time.perf_counter()
+    secret = reconstruction_phase(pp, t, q, nodes)
+    reconstruction_end = time.perf_counter()
+
+    total_end = time.perf_counter()
+
+    print("secret:", secret)
+
+    print("\nRuntime analysis")
+    print("----------------")
+    print(f"Sharing phase:        {sharing_end - sharing_start:.6f} seconds")
+    print(f"Reconstruction phase: {reconstruction_end - reconstruction_start:.6f} seconds")
+    print(f"Total runtime:        {total_end - total_start:.6f} seconds")
 
 
 algorithm1()

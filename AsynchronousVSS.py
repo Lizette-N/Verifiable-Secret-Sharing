@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import time
 from dataclasses import dataclass
 import hashlib
 from inspect import Signature
@@ -72,21 +72,11 @@ def make_malicious(nodes):
     ## making malicious nodes---------------------------------------##
     # nodes[1] = node id 2 and so on, because node ids start from 1 but list index starts from 0
     
-     
-    nodes[1].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
-    nodes[1].malicious_mode = "silent"
- 
-    nodes[2].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
-    nodes[2].malicious_mode = "silent"
+    nodes[1].malicious = True
+    nodes[1].malicious_mode = "invalid_ack"
 
-    nodes[3].malicious = True # node id 2 er ondsindet og sender ikke et svar på SHARE beskeden (aka ingen ACK)
-    nodes[3].malicious_mode = "silent"
-
-    nodes[4].malicious = True # node id 5 er ondsindet og sender en ugyldig ACK (aka en ACK som ikke er en signatur på commitment v)
-    nodes[4].malicious_mode = "invalid_ack"# men sender gyldig Recon og dermed kan rekonstrueres korrekt, så den ikke forstyrrer reconstruction phase
-    
-    nodes[6].malicious = True # node id 7 er ondsindet og sender en ugyldig RECON (aka share og proof passer ikke sammen)
-    nodes[6].malicious_mode = "invalid_recon"
+    nodes[6].malicious = True 
+    nodes[6].malicious_mode = "silent"
 
 def reliable_broadcast(message, nodes):
     #simulation of byzantine reliable broadcast
@@ -94,8 +84,8 @@ def reliable_broadcast(message, nodes):
 
 def variable_initialization():
     m = 234 # s(0)=m then s(0) is the secret to be shared
-    t = 3 # max malicious nodes, sharing polynomial has degree 2t, reconstruction needs 2t+1 shares
-    q = 251 # must be prime
+    t = 20 # max malicious nodes, sharing polynomial has degree 2t, reconstruction needs 2t+1 shares
+    q = 251 # must be prime field modulus
     poly = sample_random_polynomial(2*t, m, q) # Sample a 2*t-degree random polynomial s(·) with s(0) = m
     n = 3 * t + 1 # choose min. number of nodes n which fullfills n >= 3t+1
     print(poly)
@@ -159,7 +149,7 @@ def wait_for_enough_valid_signatures(pp, t, nodes, v):
 
     return valid_acks, signed_nodes
 
-def checks(pp,t,nodeId,transcript,shares,nodes):
+def checks(pp,t,current_node_id,transcript,shares,nodes):
     v = transcript["commitment"]
     I = transcript["I"]
     valid_sigma = transcript["sigma"]
@@ -176,9 +166,9 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
     valid_nodes = [ack["node"] for ack in valid_sigma]
     #checker om I fra dealeren er korrekt
     expected_I = []
-    for node_id in range(1, len(shares) + 1):
-        if node_id not in valid_nodes:
-            expected_I.append(node_id)
+    for expected_node_id in range(1, len(shares) + 1):
+        if expected_node_id not in valid_nodes:
+            expected_I.append(expected_node_id)
 
     if I != expected_I:
         return 0
@@ -193,13 +183,13 @@ def checks(pp,t,nodeId,transcript,shares,nodes):
             return 0
     
     # Hvis node i mangler gyldig signatur, skal dens share være i I
-    if nodeId in I:
-        pos = I.index(nodeId)
+    if current_node_id in I:
+        pos = I.index(current_node_id)
         return (v, s[pos], pi_bold[pos])
     
     # Hvis node i har signeret gyldigt, bruger den sin oprindelige SHARE-besked
-    if nodeId in valid_nodes:
-        share_msg = shares[nodeId - 1]
+    if current_node_id in valid_nodes:
+        share_msg = shares[current_node_id - 1]
         return (v, share_msg["share"], share_msg["proof"])
     
     # Hvis den hverken er i I eller har gyldig signatur, er transcriptet forkert
@@ -352,7 +342,7 @@ def reconstruction_phase(pp, t, q, nodes):
 
     v = None
     T = []
-
+    print("shares in recon " + str(len(RECON)))
 # Algorithm 2 lines 202-206:
 # receive RECON messages, verify, collect 2t+1 shares
     for recon in RECON:
@@ -369,6 +359,7 @@ def reconstruction_phase(pp, t, q, nodes):
             continue
 
         if PC.Verify(pp, v, node_id, share, proof):
+            print("this happens "+ str(node_id))
             T.append((node_id, share))
 
         if len(T) >= 2*t + 1:
@@ -382,8 +373,23 @@ def reconstruction_phase(pp, t, q, nodes):
 
 
 def algorithm2():
+    total_start = time.perf_counter()
+
+    sharing_start = time.perf_counter()
     pp, t, q, nodes = sharing_phase()
+    sharing_end = time.perf_counter()
+
+    reconstruction_start = time.perf_counter()
     reconstruction_phase(pp, t, q, nodes)
+    reconstruction_end = time.perf_counter()
+
+    total_end = time.perf_counter()
+
+    print("\nRuntime analysis")
+    print("----------------")
+    print(f"Sharing phase:        {sharing_end - sharing_start:.6f} seconds")
+    print(f"Reconstruction phase: {reconstruction_end - reconstruction_start:.6f} seconds")
+    print(f"Total runtime:        {total_end - total_start:.6f} seconds")
 
 
 algorithm2()
