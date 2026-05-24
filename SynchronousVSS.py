@@ -89,7 +89,9 @@ def variable_initialization(numberOfNodes):
     else:
         raise ValueError("n  must be smaller than q=251, because node IDs must be distinct nonzero elements in the field.")
     
-    t = ceil(n/2)-1 # Polynomial degree and maximum number of malicious nodes tolerated
+
+    
+    t = (n-1)//2 # Polynomial degree and maximum number of malicious nodes tolerated
     delta = 1 # Maximum network latency
     poly = sample_random_polynomial(t, m, q) # t-degree random polynomial s(·) with secret m as s(0)
     

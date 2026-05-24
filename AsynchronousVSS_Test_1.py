@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil
 import secrets
 import time
 
@@ -48,7 +47,7 @@ class Node:
             return None
 
         valid_share = (
-            PC.DegCheck(pp, v, t)
+            PC.DegCheck(pp, v, 2 * t)
             and PC.Verify(
                 pp,
                 v,
@@ -86,11 +85,10 @@ def variable_initialization(numberOfNodes):
     else:
         raise ValueError("n must be smaller than q=251, because node IDs must be distinct nonzero elements in the field.")
 
-    t = ceil(n / 2) - 1
-    delta = 1
-    poly = sample_random_polynomial(t, m, q)
+    t = (n - 1) // 3
+    poly = sample_random_polynomial(2 * t, m, q)
 
-    return t, q, n, delta, poly
+    return t, q, n, poly
 
 
 def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
@@ -108,13 +106,13 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
     return coeffs
 
 
-def sharing_phase(numberOfnodes, timing):
+def sharing_phase(numberOfNodes, timing):
     dealer_mode = None
     # dealer_mode = "invalid_share"
     # dealer_mode = "missing_share"
     # dealer_mode = "invalid_transcript"
 
-    t, q, n, delta, poly = variable_initialization(numberOfnodes)
+    t, q, n, poly = variable_initialization(numberOfNodes)
     pp = PC.Setup(q)
 
     nodes = []
@@ -130,7 +128,7 @@ def sharing_phase(numberOfnodes, timing):
 
         nodes.append(node)
 
-   #make_malicious(nodes)
+    # make_malicious(nodes)
 
     start = time.perf_counter()
     v, w = PC.Commit(pp, poly, n)
@@ -152,22 +150,7 @@ def sharing_phase(numberOfnodes, timing):
         if share is not None:
             node.receive_share(share)
 
-    ACK = collect_acks(pp, t, nodes, delta, timing)
-
-    valid_sigma = []
-    signed_nodes = []
-
-    for ack in ACK:
-        node_id = ack["node"]
-        verification_key = nodes[node_id - 1].verification_key
-
-        start = time.perf_counter()
-        valid = Signatures.Verify(pp, verification_key, v, ack["signature"])
-        timing["ack_signature_verification_time"] += time.perf_counter() - start
-
-        if valid:
-            valid_sigma.append(ack)
-            signed_nodes.append(node_id)
+    valid_sigma, signed_nodes = wait_for_enough_valid_signatures(pp, t, nodes, v, timing)
 
     I = []
 
@@ -193,7 +176,7 @@ def sharing_phase(numberOfnodes, timing):
         "proofs": pi_bold,
     }
 
-    broadcast_outputs = broadcast(transcript, nodes)
+    broadcast_outputs = reliable_broadcast(transcript, nodes)
 
     for node, transcript in zip(nodes, broadcast_outputs):
         start = time.perf_counter()
@@ -209,26 +192,14 @@ def sharing_phase(numberOfnodes, timing):
 #     if len(nodes) > 1:
 #         nodes[1].malicious = True
 #         nodes[1].malicious_mode = "invalid_ack"
-
-#     if len(nodes) > 2:
-#         nodes[2].malicious = True
-#         nodes[2].malicious_mode = "invalid_ack"
-
-#     if len(nodes) > 3:
-#         nodes[3].malicious = True
-#         nodes[3].malicious_mode = "invalid_recon"
-
-#     if len(nodes) > 4:
-#         nodes[4].malicious = True
-#         nodes[4].malicious_mode = "invalid_recon"
-
-#     if len(nodes) > 5:
-#         nodes[5].malicious = True
-#         nodes[5].malicious_mode = "silent"
-
+#
 #     if len(nodes) > 6:
 #         nodes[6].malicious = True
 #         nodes[6].malicious_mode = "silent"
+
+
+def reliable_broadcast(message, nodes):
+    return [message for _ in nodes]
 
 
 def send_shares(pp, v, w, s, n):
@@ -250,18 +221,12 @@ def send_shares(pp, v, w, s, n):
     return shares
 
 
-def collect_acks(pp, t, nodes, delta, timing):
-    ACK = []
-    deadline = 2 * delta
-
-    ack_arrival_times = {
-        # 3: 3 * delta,
-    }
+def wait_for_enough_valid_signatures(pp, t, nodes, v, timing):
+    valid_acks = []
+    signed_nodes = set()
+    threshold = 2 * t + 1
 
     for node in nodes:
-        if node.malicious and node.malicious_mode == "silent":
-            continue
-
         start = time.perf_counter()
         ack = node.create_ack(pp, t)
         timing["ack_creation_time"] += time.perf_counter() - start
@@ -269,19 +234,30 @@ def collect_acks(pp, t, nodes, delta, timing):
         if ack is None:
             continue
 
-        arrival_time = ack_arrival_times.get(node.id, 2 * delta)
-        ack["arrival_time"] = arrival_time
+        node_id = ack["node"]
 
-        if arrival_time <= deadline:
-            ACK.append(ack)
-        else:
-            print(f"Node {node.id} ACK arrived at tau = {arrival_time}, too late")
+        if node_id in signed_nodes:
+            continue
 
-    return ACK
+        verification_key = nodes[node_id - 1].verification_key
 
+        start = time.perf_counter()
+        valid = Signatures.Verify(pp, verification_key, v, ack["signature"])
+        timing["ack_signature_verification_time"] += time.perf_counter() - start
 
-def broadcast(message, nodes):
-    return [message for _ in nodes]
+        if not valid:
+            continue
+
+        valid_acks.append(ack)
+        signed_nodes.add(node_id)
+
+        if len(valid_acks) >= threshold:
+            break
+
+    if len(valid_acks) < threshold:
+        raise RuntimeError("Dealer did not receive 2t + 1 valid signatures on v.")
+
+    return valid_acks, signed_nodes
 
 
 def checks(pp, t, current_node_id, transcript, shares, nodes):
@@ -309,7 +285,7 @@ def checks(pp, t, current_node_id, transcript, shares, nodes):
     if I != expected_I:
         return 0
 
-    if len(valid_sigma) < t + 1:
+    if len(valid_sigma) < 2 * t + 1:
         return 0
 
     if len(I) > 0:
@@ -358,7 +334,7 @@ def reconstruction_phase(pp, t, q, nodes, timing):
         if valid_share:
             T.append((node_id, share))
 
-        if len(T) == t + 1:
+        if len(T) >= 2 * t + 1:
             start = time.perf_counter()
             secret = lagrange_interpolate_at_zero(T, q)
             timing["lagrange_time"] += time.perf_counter() - start
@@ -407,13 +383,13 @@ def lagrange_interpolate_at_zero(points, q):
     return secret
 
 
-def algorithm1(numberOfnodes, print_result=True):
+def algorithm2(numberOfNodes, print_result=True):
     timing = empty_timing()
 
     total_start = time.perf_counter()
 
     sharing_start = time.perf_counter()
-    pp, t, q, nodes = sharing_phase(numberOfnodes, timing)
+    pp, t, q, nodes = sharing_phase(numberOfNodes, timing)
     timing["sharing_total_time"] = time.perf_counter() - sharing_start
 
     reconstruction_start = time.perf_counter()
@@ -465,12 +441,12 @@ def algorithm1(numberOfnodes, print_result=True):
     return secret, timing
 
 
-def run_experiment(numberOfnodes, numberOfRuns):
+def run_experiment(numberOfNodes, numberOfRuns):
     totals = empty_timing()
     secrets = []
 
     for _ in range(numberOfRuns):
-        secret, timing = algorithm1(numberOfnodes, print_result=False)
+        secret, timing = algorithm2(numberOfNodes, print_result=False)
         secrets.append(secret)
 
         for key in totals:
@@ -498,7 +474,7 @@ def run_experiment(numberOfnodes, numberOfRuns):
         + averages["lagrange_time"]
     )
 
-    print(f"Ran algorithm1 {numberOfRuns} times with n = {numberOfnodes}")
+    print(f"Ran algorithm2 {numberOfRuns} times with n = {numberOfNodes}")
     print("Secrets:", secrets)
 
     print("\nAverage runtime analysis")
@@ -524,4 +500,4 @@ def run_experiment(numberOfnodes, numberOfRuns):
     return averages
 
 
-run_experiment(numberOfnodes=50, numberOfRuns=10)
+run_experiment(numberOfNodes=125, numberOfRuns=10)
