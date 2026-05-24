@@ -107,15 +107,16 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
     return coeffs
 
 #-------------------------------Variable explanation-------------------------------##
-#nonce_commitment = R = g^k mod p
-#c = H(R, v) mod q
-#responce= z = k + c * sk_i mod q
-# w = r() aka det tilfældige polynomium
-# poly = s() aka det hemmelige polynomium
-# v = [g^s(1) * h^r(1), g^s(2) * h^r(2), ..., g^s(n) * h^r(n)] aka commitment til det hemmelige polynomium
-# I = nodes missing valid ACK signatures on v
-# sigma = signatures for ACKs fra de ærlige nodes aka sendt ACK
-# pp = G F g h
+# pp = public parameters for the protocol and commitment scheme
+# poly = s(x), the secret sharing polynomial where s(0) is the secret
+# w = r(x), the random blinding polynomial used in the Pedersen commitment
+# v = polynomial commitment to s(x), where v[i] = g^s(i) * h^r(i).
+# ACK = acknowledgement messages from nodes that verified their shares
+# sigma = valid ACK signatures on the commitment v
+# I = node IDs that did not send a valid ACK signature
+# s = revealed shares s(i) for all nodes in I
+# pi_bold = opening proofs r(i) for all revealed shares in I
+# transcript = public message broadcast by the dealer after collecting ACKs
 
 def sharing_phase(numberOfnodes):
     dealer_mode = None
