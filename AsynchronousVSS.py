@@ -115,7 +115,7 @@ def sharing_phase(numberOfNodes):
         nodes.append(node)
     
     # making the malicious nodes (not part of algorithem but needed for testing) 
-    make_malicious(nodes)
+    #make_malicious(nodes)
     
     v, w = PC.Commit(pp, poly, n)
     shares = send_shares(pp, v, w, poly, n)
@@ -381,25 +381,11 @@ def reconstruction_phase(pp, t, q, nodes):
 
 
 def algorithm2(numberOfNodes):
-    total_start = time.perf_counter()
+    pp, t, q, nodes = sharing_phase(numberOfNodes)
 
-    sharing_start = time.perf_counter()
-    pp, t, q, nodes = sharing_phase()
-    sharing_end = time.perf_counter()
+    secret = reconstruction_phase(pp, t, q, nodes)
+    print("secret:", secret)
 
-    reconstruction_start = time.perf_counter()
-    reconstruction_phase(pp, t, q, nodes)
-    reconstruction_end = time.perf_counter()
-
-    total_end = time.perf_counter()
-
-    print("\nRuntime analysis")
-    print("----------------")
-    print(f"Sharing phase:        {sharing_end - sharing_start:.6f} seconds")
-    print(f"Reconstruction phase: {reconstruction_end - reconstruction_start:.6f} seconds")
-    print(f"Total runtime:        {total_end - total_start:.6f} seconds")
-
-
-algorithm2(numberOfNodes=10)
+algorithm2(numberOfNodes=20)
 
 

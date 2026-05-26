@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from math import ceil
-import hashlib
-import pickle
-import secrets
 import time
+import pickle
+from dataclasses import dataclass
+import hashlib
+from inspect import Signature
+import secrets
 from typing import Sequence
 import PC
 import Signatures
+from math import ceil
 
 
 @dataclass
@@ -34,7 +35,7 @@ class Node:
             return None
 
         valid_share = (
-            PC.DegCheck(pp, v, t)
+            PC.DegCheck(pp, v, 2 * t)
             and PC.Verify(
                 pp,
                 v,
@@ -95,24 +96,32 @@ def print_bandwidth_metrics(metrics, n):
         + metrics["sharing_dealer_received_bytes"]
     )
 
-    receivers_total = (
+    receiver_avg = (
         metrics["sharing_receivers_sent_bytes"]
         + metrics["sharing_receivers_received_bytes"]
-    )
+    ) / n
 
-    sharing_total = dealer_total + receivers_total
+    network_total = (
+        metrics["sharing_dealer_sent_bytes"]
+        + metrics["sharing_receivers_sent_bytes"]
+    )
 
     print("\nSharing phase bandwidth analysis")
     print("--------------------------------")
-    print(f"Dealer sent:              {kb(metrics['sharing_dealer_sent_bytes']):.3f} KB")
-    print(f"Dealer received:          {kb(metrics['sharing_dealer_received_bytes']):.3f} KB")
-    print(f"Dealer total:             {kb(dealer_total):.3f} KB")
-    print(f"Receivers sent total:     {kb(metrics['sharing_receivers_sent_bytes']):.3f} KB")
-    print(f"Receivers received total: {kb(metrics['sharing_receivers_received_bytes']):.3f} KB")
-    print(f"Receiver avg sent:        {kb(metrics['sharing_receivers_sent_bytes'] / n):.3f} KB")
-    print(f"Receiver avg received:    {kb(metrics['sharing_receivers_received_bytes'] / n):.3f} KB")
-    print(f"Broadcast bytes:          {kb(metrics['sharing_broadcast_bytes']):.3f} KB")
-    print(f"Sharing total:            {mb(sharing_total):.6f} MB")
+    print(f"Dealer bandwidth:          {mb(dealer_total):.6f} MB")
+    print(f"Receiver avg bandwidth:    {kb(receiver_avg):.3f} KB")
+    print(f"Logical network total:     {mb(network_total):.6f} MB")
+    print(f"Broadcast contribution:    {mb(metrics['sharing_broadcast_bytes']):.6f} MB")
+
+    print("\nDetailed breakdown")
+    print("------------------")
+    print(f"Dealer sent:               {kb(metrics['sharing_dealer_sent_bytes']):.3f} KB")
+    print(f"Dealer received:           {kb(metrics['sharing_dealer_received_bytes']):.3f} KB")
+    print(f"Receivers sent total:      {kb(metrics['sharing_receivers_sent_bytes']):.3f} KB")
+    print(f"Receivers received total:  {kb(metrics['sharing_receivers_received_bytes']):.3f} KB")
+    print(f"Receiver avg sent:         {kb(metrics['sharing_receivers_sent_bytes'] / n):.3f} KB")
+    print(f"Receiver avg received:     {kb(metrics['sharing_receivers_received_bytes'] / n):.3f} KB")
+
 
 def variable_initialization(numberOfNodes):
     m = 234
@@ -123,11 +132,10 @@ def variable_initialization(numberOfNodes):
     else:
         raise ValueError("n must be smaller than q=251, because node IDs must be distinct nonzero elements in the field.")
 
-    t = (n - 1) // 2
-    delta = 1
-    poly = sample_random_polynomial(t, m, q)
+    t = (n - 1) // 3
+    poly = sample_random_polynomial(2 * t, m, q)
 
-    return t, q, n, delta, poly
+    return t, q, n, poly
 
 
 def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
@@ -145,10 +153,10 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
     return coeffs
 
 
-def sharing_phase(numberOfnodes, bandwidth_metrics):
+def sharing_phase(numberOfNodes, bandwidth_metrics):
     dealer_mode = None
 
-    t, q, n, delta, poly = variable_initialization(numberOfnodes)
+    t, q, n, poly = variable_initialization(numberOfNodes)
     pp = PC.Setup(q)
 
     nodes = []
@@ -179,26 +187,21 @@ def sharing_phase(numberOfnodes, bandwidth_metrics):
         if share is not None:
             node.receive_share(share)
 
-    ACK = collect_acks(pp, t, nodes, delta, bandwidth_metrics)
-
-    valid_sigma = []
-    signed_nodes = []
-
-    for ack in ACK:
-        node_id = ack["node"]
-        verification_key = nodes[node_id - 1].verification_key
-
-        valid = Signatures.Verify(pp, verification_key, v, ack["signature"])
-
-        if valid:
-            valid_sigma.append(ack)
-            signed_nodes.append(node_id)
+    valid_sigma, signed_nodes = wait_for_enough_valid_signatures(
+        pp,
+        t,
+        nodes,
+        v,
+        bandwidth_metrics,
+    )
 
     I = []
 
     for node in nodes:
         if node.id not in signed_nodes:
             I.append(node.id)
+
+    print("nodes missing valid signatures I:", I)
 
     s, pi_bold = PC.BatchOpen(pp, poly, I, w)
 
@@ -220,7 +223,7 @@ def sharing_phase(numberOfnodes, bandwidth_metrics):
     add_bytes(bandwidth_metrics, "sharing_receivers_received_bytes", transcript, multiplier=n)
     add_bytes(bandwidth_metrics, "sharing_broadcast_bytes", transcript, multiplier=n)
 
-    broadcast_outputs = broadcast(transcript, nodes)
+    broadcast_outputs = reliable_broadcast(transcript, nodes)
 
     for node, transcript in zip(nodes, broadcast_outputs):
         result = checks(pp, t, node.id, transcript, shares, nodes)
@@ -234,25 +237,13 @@ def make_malicious(nodes):
         nodes[1].malicious = True
         nodes[1].malicious_mode = "invalid_ack"
 
-    if len(nodes) > 2:
-        nodes[2].malicious = True
-        nodes[2].malicious_mode = "invalid_ack"
-
-    if len(nodes) > 3:
-        nodes[3].malicious = True
-        nodes[3].malicious_mode = "invalid_recon"
-
-    if len(nodes) > 4:
-        nodes[4].malicious = True
-        nodes[4].malicious_mode = "invalid_recon"
-
-    if len(nodes) > 5:
-        nodes[5].malicious = True
-        nodes[5].malicious_mode = "silent"
-
     if len(nodes) > 6:
         nodes[6].malicious = True
         nodes[6].malicious_mode = "silent"
+
+
+def reliable_broadcast(message, nodes):
+    return [message for _ in nodes]
 
 
 def send_shares(pp, v, w, s, n, bandwidth_metrics):
@@ -277,17 +268,12 @@ def send_shares(pp, v, w, s, n, bandwidth_metrics):
     return shares
 
 
-def collect_acks(pp, t, nodes, delta, bandwidth_metrics):
-    ACK = []
-    deadline = 2 * delta
-
-    ack_arrival_times = {
-    }
+def wait_for_enough_valid_signatures(pp, t, nodes, v, bandwidth_metrics):
+    valid_acks = []
+    signed_nodes = set()
+    threshold = 2 * t + 1
 
     for node in nodes:
-        if node.malicious and node.malicious_mode == "silent":
-            continue
-
         ack = node.create_ack(pp, t)
 
         if ack is None:
@@ -296,19 +282,28 @@ def collect_acks(pp, t, nodes, delta, bandwidth_metrics):
         add_bytes(bandwidth_metrics, "sharing_receivers_sent_bytes", ack)
         add_bytes(bandwidth_metrics, "sharing_dealer_received_bytes", ack)
 
-        arrival_time = ack_arrival_times.get(node.id, 2 * delta)
-        ack["arrival_time"] = arrival_time
+        node_id = ack["node"]
 
-        if arrival_time <= deadline:
-            ACK.append(ack)
-        else:
-            print(f"Node {node.id} ACK arrived at tau = {arrival_time}, too late")
+        if node_id in signed_nodes:
+            continue
 
-    return ACK
+        verification_key = nodes[node_id - 1].verification_key
 
+        valid = Signatures.Verify(pp, verification_key, v, ack["signature"])
 
-def broadcast(message, nodes):
-    return [message for _ in nodes]
+        if not valid:
+            continue
+
+        valid_acks.append(ack)
+        signed_nodes.add(node_id)
+
+        if len(valid_acks) >= threshold:
+            break
+
+    if len(valid_acks) < threshold:
+        raise RuntimeError("Dealer did not receive 2t + 1 valid signatures on v.")
+
+    return valid_acks, signed_nodes
 
 
 def checks(pp, t, current_node_id, transcript, shares, nodes):
@@ -336,7 +331,7 @@ def checks(pp, t, current_node_id, transcript, shares, nodes):
     if I != expected_I:
         return 0
 
-    if len(valid_sigma) < t + 1:
+    if len(valid_sigma) < 2 * t + 1:
         return 0
 
     if len(I) > 0:
@@ -352,62 +347,6 @@ def checks(pp, t, current_node_id, transcript, shares, nodes):
         return (v, share_msg["share"], share_msg["proof"])
 
     return 0
-
-
-def reconstruction_phase(pp, t, q, nodes):
-    RECON = []
-    n = len(nodes)
-
-    for node in nodes:
-        recon = create_recon(node)
-
-        if recon is not None:
-            RECON.append(recon)
-
-    v = None
-    T = []
-
-    for recon in RECON:
-        node_id = recon["node"]
-        commitment = recon["commitment"]
-        share = recon["share"]
-        proof = recon["proof"]
-
-        if v is None:
-            v = commitment
-
-        if commitment != v:
-            continue
-
-        if PC.Verify(pp, v, node_id, share, proof):
-            T.append((node_id, share))
-
-        if len(T) == t + 1:
-            secret = lagrange_interpolate_at_zero(T, q)
-            return secret
-
-    return None
-
-
-def create_recon(self):
-    if self.output is None or self.output == 0:
-        return None
-
-    commitment, share, proof = self.output
-
-    if self.malicious and self.malicious_mode == "silent":
-        return None
-
-    if self.malicious and self.malicious_mode == "invalid_recon":
-        share = share + 1
-
-    return {
-        "type": "RECON",
-        "node": self.id,
-        "commitment": commitment,
-        "share": share,
-        "proof": proof,
-    }
 
 
 def lagrange_interpolate_at_zero(points, q):
@@ -428,30 +367,75 @@ def lagrange_interpolate_at_zero(points, q):
     return secret
 
 
-def algorithm1(numberOfnodes):
+def create_recon(self):
+    if self.output is None or self.output == 0:
+        return None
+
+    commitment, share, proof = self.output
+
+    if self.malicious and self.malicious_mode == "silent":
+        print(f"Node {self.id} is malicious and sends no RECON")
+        return None
+
+    if self.malicious and self.malicious_mode == "invalid_recon":
+        print(f"Node {self.id} is malicious and sends wrong RECON")
+        share = share + 1
+
+    return {
+        "type": "RECON",
+        "node": self.id,
+        "commitment": commitment,
+        "share": share,
+        "proof": proof,
+    }
+
+
+def reconstruction_phase(pp, t, q, nodes):
+    RECON = []
+
+    for node in nodes:
+        recon = create_recon(node)
+
+        if recon is not None:
+            RECON.append(recon)
+
+    v = None
+    T = []
+
+    print("shares in recon:", len(RECON))
+
+    for recon in RECON:
+        node_id = recon["node"]
+        commitment = recon["commitment"]
+        share = recon["share"]
+        proof = recon["proof"]
+
+        if v is None:
+            v = commitment
+
+        if commitment != v:
+            continue
+
+        if PC.Verify(pp, v, node_id, share, proof):
+            T.append((node_id, share))
+
+        if len(T) >= 2 * t + 1:
+            secret = lagrange_interpolate_at_zero(T, q)
+            print("Reconstructed secret:", secret)
+            return secret
+
+    print("Not enough valid shares")
+    return None
+
+
+def algorithm2(numberOfNodes):
     bandwidth_metrics = empty_bandwidth_metrics()
 
-    total_start = time.perf_counter()
+    pp, t, q, nodes = sharing_phase(numberOfNodes, bandwidth_metrics)
 
-    sharing_start = time.perf_counter()
-    pp, t, q, nodes = sharing_phase(numberOfnodes, bandwidth_metrics)
-    sharing_end = time.perf_counter()
+    reconstruction_phase(pp, t, q, nodes)
 
-    reconstruction_start = time.perf_counter()
-    secret = reconstruction_phase(pp, t, q, nodes)
-    reconstruction_end = time.perf_counter()
-
-    total_end = time.perf_counter()
-
-    print("secret:", secret)
-
-    print("\nRuntime analysis")
-    print("----------------")
-    print(f"Sharing phase:        {sharing_end - sharing_start:.6f} seconds")
-    print(f"Reconstruction phase: {reconstruction_end - reconstruction_start:.6f} seconds")
-    print(f"Total runtime:        {total_end - total_start:.6f} seconds")
-
-    print_bandwidth_metrics(bandwidth_metrics, numberOfnodes)
+    print_bandwidth_metrics(bandwidth_metrics, numberOfNodes)
 
 
-algorithm1(numberOfnodes=250)
+algorithm2(numberOfNodes=20)
