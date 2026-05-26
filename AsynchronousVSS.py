@@ -7,7 +7,7 @@ import secrets
 from typing import Sequence
 import PC
 import Signatures
-from dataclasses import dataclass
+from math import ceil
 
 @dataclass
 class Node: # repræsentere en node i systemet
@@ -57,14 +57,19 @@ class Node: # repræsentere en node i systemet
             "signature": sigma_i,
         }
     
-def variable_initialization():
+def variable_initialization(numberOfNodes):
     m = 234 # s(0)=m then s(0) is the secret to be shared
-    t = 20 # max malicious nodes, sharing polynomial has degree 2t, reconstruction needs 2t+1 shares
     q = 251 # must be prime field modulus
+
+    if numberOfNodes<q: 
+        n = numberOfNodes # number of nodes in the protocol
+    else:
+        raise ValueError("n  must be smaller than q=251, because node IDs must be distinct nonzero elements in the field.")
+    
+    # AVSS requires n >= 3t + 1, so the maximum allowed t is floor((n-1)/3)
+    t = (n-1)//3
     poly = sample_random_polynomial(2*t, m, q) # Sample a 2*t-degree random polynomial s(·) with s(0) = m
-    n = 3 * t + 1 # choose min. number of nodes n which fullfills n >= 3t+1
-    print(poly)
-    print("n = " + str(n))
+
     return t, q, n, poly
 
 def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
@@ -89,13 +94,13 @@ def sample_random_polynomial(degree: int, secret: int, q: int) -> list[int]:
 # sigma = signatures for ACKs fra de ærlige nodes aka sendt ACK
 # pp = G F g h
             
-def sharing_phase():
+def sharing_phase(numberOfNodes):
     dealer_mode = None
     # dealer_mode = "invalid_share"
     # dealer_mode = "missing_share"
     # dealer_mode = "invalid_transcript"
 
-    t , q, n, poly = variable_initialization()
+    t , q, n, poly = variable_initialization(numberOfNodes)
     pp = PC.Setup(q)
     
     nodes = []
@@ -124,7 +129,8 @@ def sharing_phase():
         shares[2] = None
 
     for node, share in zip(nodes, shares):
-        node.receive_share(share)
+        if share is not None:
+            node.receive_share(share)
         
     ## wait for 2t + 1 valid signatures on v
     valid_sigma, signed_nodes = wait_for_enough_valid_signatures(pp, t, nodes, v)
@@ -374,7 +380,7 @@ def reconstruction_phase(pp, t, q, nodes):
 
 
 
-def algorithm2():
+def algorithm2(numberOfNodes):
     total_start = time.perf_counter()
 
     sharing_start = time.perf_counter()
@@ -394,6 +400,6 @@ def algorithm2():
     print(f"Total runtime:        {total_end - total_start:.6f} seconds")
 
 
-algorithm2()
+algorithm2(numberOfNodes=10)
 
 
