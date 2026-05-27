@@ -12,8 +12,77 @@ Sync = import_without_output("SynchronousVSS")
 SECRET = 234
 
 
+def empty_timing():
+    return {
+        "commitment_time": 0.0,
+        "opening_proofs_time": 0.0,
+        "ack_creation_time": 0.0,
+        "ack_signature_verification_time": 0.0,
+        "batch_open_time": 0.0,
+        "transcript_check_time": 0.0,
+        "recon_share_verification_time": 0.0,
+        "lagrange_time": 0.0,
+        "sharing_total_time": 0.0,
+        "reconstruction_total_time": 0.0,
+        "total_time": 0.0,
+        "setup_keygen_time": 0.0,
+    }
+
+
+def grouped_times(timing):
+    dealer_time = (
+        timing["commitment_time"]
+        + timing["opening_proofs_time"]
+        + timing["ack_signature_verification_time"]
+        + timing["batch_open_time"]
+    )
+    verification_time = timing["ack_creation_time"] + timing["transcript_check_time"]
+    reconstruction_time = timing["recon_share_verification_time"] + timing["lagrange_time"]
+
+    return dealer_time, verification_time, reconstruction_time
+
+
+def timed_reconstruction_phase(pp, t, q, nodes, timing):
+    recon_messages = []
+
+    for node in nodes:
+        recon = Sync.create_recon(node)
+        if recon is not None:
+            recon_messages.append(recon)
+
+    commitment = None
+    accepted_points = []
+
+    for recon in recon_messages:
+        node_id = recon["node"]
+        recon_commitment = recon["commitment"]
+        share = recon["share"]
+        proof = recon["proof"]
+
+        if commitment is None:
+            commitment = recon_commitment
+
+        if recon_commitment != commitment:
+            continue
+
+        start = time.perf_counter()
+        valid = Sync.PC.Verify(pp, commitment, node_id, share, proof)
+        timing["recon_share_verification_time"] += time.perf_counter() - start
+
+        if valid:
+            accepted_points.append((node_id, share))
+
+        if len(accepted_points) == t + 1:
+            start = time.perf_counter()
+            secret = Sync.lagrange_interpolate_at_zero(accepted_points, q)
+            timing["lagrange_time"] += time.perf_counter() - start
+            return secret
+
+    return None
+
+
 def run_correctness_test(
-    number_of_nodes=20,
+    number_of_nodes=50,
     bad_node_count=0,
     malicious_type="silent",
     dealer_type="honest",
@@ -25,7 +94,8 @@ def run_correctness_test(
     malicious_type options: "silent", "invalid_ack", "invalid_recon"
     dealer_type options: "honest", "incorrect_share", "missing_share", "wrong_transcript"
     """
-    start = time.perf_counter()
+    timing = empty_timing()
+    total_start = time.perf_counter()
 
     with contextlib.redirect_stdout(io.StringIO()):
         setup_start = time.perf_counter()
@@ -36,7 +106,7 @@ def run_correctness_test(
         for node_id in range(1, n + 1):
             signing_key, verification_key = Sync.Signatures.GenerateKeyPair(pp)
             nodes.append(Sync.Node(node_id, signing_key, verification_key))
-        setup_time = time.perf_counter() - setup_start
+        timing["setup_keygen_time"] = time.perf_counter() - setup_start
 
         bad_nodes = list(range(1, min(bad_node_count, n) + 1))
         late_nodes = list(range(len(bad_nodes) + 1, min(len(bad_nodes) + late_node_count, n) + 1))
@@ -45,9 +115,15 @@ def run_correctness_test(
             nodes[node_id - 1].malicious = True
             nodes[node_id - 1].malicious_mode = malicious_type
 
-        dealing_start = time.perf_counter()
+        sharing_start = time.perf_counter()
+        start = time.perf_counter()
         commitment, witness = Sync.PC.Commit(pp, polynomial, n)
+        timing["commitment_time"] += time.perf_counter() - start
+
+        start = time.perf_counter()
         shares = Sync.send_shares(pp, commitment, witness, polynomial, n)
+        timing["opening_proofs_time"] += time.perf_counter() - start
+
         delivered_shares = [dict(share) for share in shares]
 
         dealer_target = 3 if n >= 3 else 1
@@ -59,25 +135,45 @@ def run_correctness_test(
         for node, share in zip(nodes, delivered_shares):
             if share is not None:
                 node.receive_share(share)
-        dealing_time = time.perf_counter() - dealing_start
 
-        verification_start = time.perf_counter()
         valid_sigma = []
         signed_nodes = []
+        deadline = 2 * delta
         for node in nodes:
-            if node.id in late_nodes:
+            if node.malicious and node.malicious_mode == "silent":
                 continue
 
+            start = time.perf_counter()
             ack = node.create_ack(pp, t)
+            timing["ack_creation_time"] += time.perf_counter() - start
+
             if ack is None:
                 continue
 
-            if Sync.Signatures.Verify(pp, node.verification_key, commitment, ack["signature"]):
+            arrival_time = 3 * delta if node.id in late_nodes else 2 * delta
+            ack["arrival_time"] = arrival_time
+
+            if arrival_time > deadline:
+                continue
+
+            start = time.perf_counter()
+            valid_ack = Sync.Signatures.Verify(
+                pp,
+                node.verification_key,
+                commitment,
+                ack["signature"],
+            )
+            timing["ack_signature_verification_time"] += time.perf_counter() - start
+
+            if valid_ack:
                 valid_sigma.append(ack)
                 signed_nodes.append(node.id)
 
         expected_I = [node.id for node in nodes if node.id not in signed_nodes]
+        start = time.perf_counter()
         opened_shares, opened_proofs = Sync.PC.BatchOpen(pp, polynomial, expected_I, witness)
+        timing["batch_open_time"] += time.perf_counter() - start
+
         transcript_I = expected_I
 
         if dealer_type == "wrong_transcript":
@@ -92,14 +188,18 @@ def run_correctness_test(
         }
 
         for node in nodes:
+            start = time.perf_counter()
             node.output = Sync.checks(pp, t, node.id, transcript, delivered_shares, nodes)
-        verification_time = time.perf_counter() - verification_start
+            timing["transcript_check_time"] += time.perf_counter() - start
+
+        timing["sharing_total_time"] = time.perf_counter() - sharing_start
 
         reconstruction_start = time.perf_counter()
-        secret = Sync.reconstruction_phase(pp, t, q, nodes)
-        reconstruction_time = time.perf_counter() - reconstruction_start
+        secret = timed_reconstruction_phase(pp, t, q, nodes, timing)
+        timing["reconstruction_total_time"] = time.perf_counter() - reconstruction_start
 
-    elapsed = time.perf_counter() - start
+    timing["total_time"] = time.perf_counter() - total_start
+    dealer_time, verification_time, reconstruction_time = grouped_times(timing)
     accepted_outputs = sum(1 for node in nodes if node.output != 0)
     missing_ack_count = len(expected_I)
     expected_success = (
@@ -123,12 +223,32 @@ def run_correctness_test(
     print(f"nodes accepting output: {accepted_outputs}/{n}")
     print(f"reconstructed secret: {secret}")
     print(f"expected secret: {SECRET if expected_success else None}")
-    print("runtime")
-    print(f"  setup/keygen:     {setup_time:.6f} seconds")
-    print(f"  dealing:          {dealing_time:.6f} seconds")
-    print(f"  verification:     {verification_time:.6f} seconds")
-    print(f"  reconstruction:   {reconstruction_time:.6f} seconds")
-    print(f"  total:            {elapsed:.6f} seconds")
+    print("\nRuntime analysis")
+    print("----------------")
+    print(f"Dealing time:          {dealer_time:.6f} seconds")
+    print(f"Verification time:     {verification_time:.6f} seconds")
+    print(f"Reconstruction time:   {reconstruction_time:.6f} seconds")
+    print(f"result: {'PASS' if correct else 'FAIL'}")
+
+    return correct
+
+
+def run_top_level_algorithm_test(number_of_nodes=20):
+    start = time.perf_counter()
+    output = io.StringIO()
+
+    with contextlib.redirect_stdout(output):
+        Sync.algorithm1(numberOfnodes=number_of_nodes)
+
+    elapsed = time.perf_counter() - start
+    printed_output = output.getvalue()
+    correct = f"secret: {SECRET}" in printed_output
+
+    print("Synchronous top-level algorithm test")
+    print("------------------------------------")
+    print(f"called: algorithm1(numberOfnodes={number_of_nodes})")
+    print(f"expected printed secret: {SECRET}")
+    print(f"time: {elapsed:.6f} seconds")
     print(f"result: {'PASS' if correct else 'FAIL'}")
 
     return correct
@@ -137,9 +257,16 @@ def run_correctness_test(
 def run_all_correctness_tests():
     scenarios = [
         {
+            "name": "top-level algorithm1",
+            "top_level": True,
+            "kwargs": {
+                "number_of_nodes": 50,
+            },
+        },
+        {
             "name": "baseline honest dealer and honest nodes",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 0,
                 "dealer_type": "honest",
             },
@@ -147,7 +274,7 @@ def run_all_correctness_tests():
         {
             "name": "late synchronous node",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 0,
                 "dealer_type": "honest",
                 "late_node_count": 1,
@@ -156,7 +283,7 @@ def run_all_correctness_tests():
         {
             "name": "silent malicious nodes",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 2,
                 "malicious_type": "silent",
                 "dealer_type": "honest",
@@ -165,7 +292,7 @@ def run_all_correctness_tests():
         {
             "name": "invalid ACK malicious nodes",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 2,
                 "malicious_type": "invalid_ack",
                 "dealer_type": "honest",
@@ -174,7 +301,7 @@ def run_all_correctness_tests():
         {
             "name": "invalid RECON malicious nodes",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 2,
                 "malicious_type": "invalid_recon",
                 "dealer_type": "honest",
@@ -183,7 +310,7 @@ def run_all_correctness_tests():
         {
             "name": "dealer sends incorrect share",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 0,
                 "dealer_type": "incorrect_share",
             },
@@ -191,7 +318,7 @@ def run_all_correctness_tests():
         {
             "name": "dealer sends no share",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 0,
                 "dealer_type": "missing_share",
             },
@@ -199,7 +326,7 @@ def run_all_correctness_tests():
         {
             "name": "dealer broadcasts wrong transcript",
             "kwargs": {
-                "number_of_nodes": 20,
+                "number_of_nodes": 50,
                 "bad_node_count": 0,
                 "dealer_type": "wrong_transcript",
             },
@@ -207,8 +334,8 @@ def run_all_correctness_tests():
         {
             "name": "too many malicious nodes",
             "kwargs": {
-                "number_of_nodes": 7,
-                "bad_node_count": 4,
+                "number_of_nodes": 50,
+                "bad_node_count": 26,
                 "malicious_type": "silent",
                 "dealer_type": "honest",
             },
@@ -221,7 +348,10 @@ def run_all_correctness_tests():
     for index, scenario in enumerate(scenarios, start=1):
         print(f"\nTest {index}: {scenario['name']}")
         print("=" * (8 + len(str(index)) + len(scenario["name"])))
-        results.append(run_correctness_test(**scenario["kwargs"]))
+        if scenario.get("top_level"):
+            results.append(run_top_level_algorithm_test(**scenario["kwargs"]))
+        else:
+            results.append(run_correctness_test(**scenario["kwargs"]))
 
     passed = sum(1 for result in results if result)
     print("\nSynchronous correctness summary")
