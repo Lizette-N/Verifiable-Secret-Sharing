@@ -82,7 +82,7 @@ def timed_reconstruction_phase(pp, t, q, nodes, timing):
 
 
 def run_correctness_test(
-    number_of_nodes=20,
+    number_of_nodes=50,
     bad_node_count=0,
     malicious_type="silent",
     dealer_type="honest",
@@ -230,7 +230,7 @@ def run_correctness_test(
     return correct
 
 
-def run_top_level_algorithm_test(number_of_nodes=20):
+def run_top_level_algorithm_test(number_of_nodes=50):
     start = time.perf_counter()
     output = io.StringIO()
 
@@ -269,28 +269,28 @@ def run_all_correctness_tests():
             },
         },
         {
-            "name": "silent malicious nodes",
+            "name": "maximum tolerated silent malicious nodes",
             "kwargs": {
                 "number_of_nodes": 50,
-                "bad_node_count": 2,
+                "bad_node_count": 16,
                 "malicious_type": "silent",
                 "dealer_type": "honest",
             },
         },
         {
-            "name": "invalid ACK malicious nodes",
+            "name": "maximum tolerated invalid ACK malicious nodes",
             "kwargs": {
                 "number_of_nodes": 50,
-                "bad_node_count": 2,
+                "bad_node_count": 16,
                 "malicious_type": "invalid_ack",
                 "dealer_type": "honest",
             },
         },
         {
-            "name": "invalid RECON malicious nodes",
+            "name": "maximum tolerated invalid RECON malicious nodes",
             "kwargs": {
                 "number_of_nodes": 50,
-                "bad_node_count": 2,
+                "bad_node_count": 16,
                 "malicious_type": "invalid_recon",
                 "dealer_type": "honest",
             },
