@@ -170,8 +170,6 @@ def sharing_phase(numberOfNodes, bandwidth_metrics):
         )
         nodes.append(node)
 
-    make_malicious(nodes)
-
     v, w = PC.Commit(pp, poly, n)
     shares = send_shares(pp, v, w, poly, n, bandwidth_metrics)
 
@@ -230,17 +228,6 @@ def sharing_phase(numberOfNodes, bandwidth_metrics):
         node.output = result
 
     return pp, t, q, nodes
-
-
-def make_malicious(nodes):
-    if len(nodes) > 1:
-        nodes[1].malicious = True
-        nodes[1].malicious_mode = "invalid_ack"
-
-    if len(nodes) > 6:
-        nodes[6].malicious = True
-        nodes[6].malicious_mode = "silent"
-
 
 def reliable_broadcast(message, nodes):
     return [message for _ in nodes]

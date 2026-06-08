@@ -128,8 +128,6 @@ def sharing_phase(numberOfNodes, timing):
 
         nodes.append(node)
 
-    # make_malicious(nodes)
-
     start = time.perf_counter()
     v, w = PC.Commit(pp, poly, n)
     timing["commitment_time"] += time.perf_counter() - start
@@ -187,15 +185,6 @@ def sharing_phase(numberOfNodes, timing):
 
     return pp, t, q, nodes
 
-
-# def make_malicious(nodes):
-#     if len(nodes) > 1:
-#         nodes[1].malicious = True
-#         nodes[1].malicious_mode = "invalid_ack"
-#
-#     if len(nodes) > 6:
-#         nodes[6].malicious = True
-#         nodes[6].malicious_mode = "silent"
 
 
 def reliable_broadcast(message, nodes):
@@ -500,4 +489,4 @@ def run_experiment(numberOfNodes, numberOfRuns):
     return averages
 
 
-run_experiment(numberOfNodes=125, numberOfRuns=10)
+run_experiment(numberOfNodes=20, numberOfRuns=10)

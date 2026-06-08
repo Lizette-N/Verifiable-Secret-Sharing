@@ -24,14 +24,13 @@ class Witness:
 
 
 def Setup(q: int ) -> PublicParameters:
+    # Create public parameters for the Pedersen polynomial commitment.
+    # q is the field modulus and also the order of the subgroup.
     if not _is_prime(q):
         raise ValueError("q must be prime.")
 
     p = _find_group_modulus(q)
-    print("group mod p" + str(p))
     g, h = _sample_independent_generators(p, q)
-    print("g: " + str(g))
-    print("h: " + str(h))
     
     return PublicParameters(
         G={
@@ -52,6 +51,8 @@ def Commit(
     polynomial: Sequence[int],
     n: int,
 ) -> tuple[Commitment, Witness]:
+    # Commit to the polynomial by evaluating it at points 1,...,n.
+    # A random blinding polynomial r(x) of the same degree is used.
     q = _field_modulus(pp)
     coeffs = _normalize_polynomial(polynomial, q)
 
@@ -62,8 +63,6 @@ def Commit(
 
     degree = _polynomial_degree(coeffs)
     blind_coeffs = _random_polynomial(degree, q) # generates the other random polynomial r(.)
-    print("blinding polynomial: " + str(tuple(blind_coeffs)))
-
     values = tuple(
         _pedersen_commit(
             pp,
@@ -72,12 +71,12 @@ def Commit(
         )
         for i in range(1, n + 1)
     )
-    print("values: " + str(values))
-    print("blinding polynomial: " + str(tuple(blind_coeffs)))
 
     return Commitment(values), Witness(tuple(blind_coeffs))
 
 
+# Open the commitment at node index i.
+# Returns the share s(i) and the opening proof r(i).
 def Open(
     pp: PublicParameters,
     witness: Witness,
@@ -110,6 +109,7 @@ def BatchOpen(
     return shares, proofs
 
 
+# Verify that u and pi open the commitment correctly at index i.
 def Verify(
     pp: PublicParameters,
     commitment: Commitment,
@@ -117,6 +117,7 @@ def Verify(
     u: int,
     pi: int,
 ) -> bool:
+    # Check that the committed polynomial has degree at most degree.
     return commitment.values[i - 1] == _pedersen_commit(pp, u, pi)
 
 
@@ -174,6 +175,7 @@ def _group_modulus(pp: PublicParameters) -> int:
     return int(pp.G["modulus"])
 
 
+# Compute g^value * h^blinding mod p.
 def _pedersen_commit(pp: PublicParameters, value: int, blinding: int) -> int:
     p = _group_modulus(pp)
     q = _field_modulus(pp)

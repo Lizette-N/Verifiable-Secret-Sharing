@@ -130,7 +130,6 @@ def sharing_phase(numberOfnodes, timing):
 
         nodes.append(node)
 
-   #make_malicious(nodes)
 
     start = time.perf_counter()
     v, w = PC.Commit(pp, poly, n)
@@ -139,14 +138,6 @@ def sharing_phase(numberOfnodes, timing):
     start = time.perf_counter()
     shares = send_shares(pp, v, w, poly, n)
     timing["opening_proofs_time"] += time.perf_counter() - start
-
-    if dealer_mode == "invalid_share":
-        print("Dealer is malicious and sends an invalid SHARE to node 3")
-        shares[2]["share"] = shares[2]["share"] + 1
-
-    if dealer_mode == "missing_share":
-        print("Dealer is malicious and sends no SHARE to node 3")
-        shares[2] = None
 
     for node, share in zip(nodes, shares):
         if share is not None:
@@ -203,33 +194,6 @@ def sharing_phase(numberOfnodes, timing):
         node.output = result
 
     return pp, t, q, nodes
-
-
-# def make_malicious(nodes):
-#     if len(nodes) > 1:
-#         nodes[1].malicious = True
-#         nodes[1].malicious_mode = "invalid_ack"
-
-#     if len(nodes) > 2:
-#         nodes[2].malicious = True
-#         nodes[2].malicious_mode = "invalid_ack"
-
-#     if len(nodes) > 3:
-#         nodes[3].malicious = True
-#         nodes[3].malicious_mode = "invalid_recon"
-
-#     if len(nodes) > 4:
-#         nodes[4].malicious = True
-#         nodes[4].malicious_mode = "invalid_recon"
-
-#     if len(nodes) > 5:
-#         nodes[5].malicious = True
-#         nodes[5].malicious_mode = "silent"
-
-#     if len(nodes) > 6:
-#         nodes[6].malicious = True
-#         nodes[6].malicious_mode = "silent"
-
 
 def send_shares(pp, v, w, s, n):
     shares = []
@@ -524,4 +488,4 @@ def run_experiment(numberOfnodes, numberOfRuns):
     return averages
 
 
-run_experiment(numberOfnodes=50, numberOfRuns=10)
+run_experiment(numberOfnodes=10, numberOfRuns=10)
